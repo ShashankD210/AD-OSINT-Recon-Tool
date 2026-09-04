@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AD Username Recon Tool</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2f3a;
+    --text: #e6e8eb;
+    --muted: #9aa3af;
+    --accent: #5b8cff;
+    --accent-dark: #3f66cc;
+    --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    margin: 0;
+    padding: 24px;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px; }
+  .banner {
+    background: #2a1f12;
+    border: 1px solid #6b4a1a;
+    color: #e8c68a;
+    padding: 12px 14px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    margin-bottom: 20px;
+    line-height: 1.5;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    margin-bottom: 18px;
+  }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+  textarea, input[type=text] {
+    width: 100%;
+    background: #0d0f13;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 10px;
+    font-family: var(--mono);
+    font-size: 0.9rem;
+    resize: vertical;
+  }
+  textarea { min-height: 140px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+  .row > div { flex: 1; min-width: 200px; }
+  .checks { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 10px; }
+  .checks label { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 0.85rem; }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    margin-top: 16px;
+    margin-right: 8px;
+  }
+  button:hover { background: var(--accent-dark); }
+  button.secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  button.secondary:hover { border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  .table-scroll { max-height: 420px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; margin-top: 12px; }
+  .count { color: var(--muted); font-size: 0.85rem; margin-top: 10px; }
+  code { font-family: var(--mono); background: #0d0f13; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AD Username Recon Tool</h1>
+  <div class="subtitle">Generate likely Active Directory / O365 username candidates from employee names.</div>
+
+  <div class="banner">
+    ⚠️ Use only against organizations you have explicit written authorization to assess.
+    This tool generates candidate usernames from names you provide — it does not
+    perform lookups, logins, or password attempts against any system.
+  </div>
+
+  <div class="panel">
+    <label for="names">Employee full names (one per line)</label>
+    <textarea id="names" placeholder="Jane Smith
+John A. Doe
+Mary-Anne O'Brien"></textarea>
+
+    <div class="row">
+      <div>
+        <label for="domain">Email domain (optional)</label>
+        <input type="text" id="domain" placeholder="victim.com">
+      </div>
+    </div>
+
+    <label style="margin-top:14px;">Username patterns to include</label>
+    <div class="checks" id="patternChecks"></div>
+
+    <div class="checks" style="margin-top:12px;">
+      <label><input type="checkbox" id="expandNicknames" checked> Expand nicknames (Bill ↔ William, etc.)</label>
+    </div>
+
+    <button onclick="generate()">Generate</button>
+    <button class="secondary" onclick="exportCSV()">Export CSV</button>
+    <button class="secondary" onclick="exportJSON()">Export JSON</button>
+  </div>
+
+  <div class="panel">
+    <label for="companyName">Company name (for search-dork generation)</label>
+    <input type="text" id="companyName" placeholder="Victim Corp">
+    <button class="secondary" onclick="generateDorks()" style="margin-top:12px;">Generate search dorks</button>
+    <div id="dorksOut" style="display:none; margin-top:12px;">
+      <div class="count" style="margin-bottom:6px;">Paste these into a search engine manually — nothing here is queried automatically.</div>
+      <div class="table-scroll" style="max-height:260px;">
+        <table><tbody id="dorksBody"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="resultsPanel" style="display:none;">
+    <div class="count" id="countLine"></div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Full name</th><th>Username</th><th>Email</th></tr></thead>
+        <tbody id="resultsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const PATTERNS = [
+  { id: 'first.last', label: 'jane.smith', fn: (f,l) => `${f}.${l}` },
+  { id: 'firstlast', label: 'janesmith', fn: (f,l) => `${f}${l}` },
+  { id: 'flast', label: 'jsmith', fn: (f,l) => `${f[0]||''}${l}` },
+  { id: 'firstl', label: 'janes', fn: (f,l) => `${f}${l[0]||''}` },
+  { id: 'lastf', label: 'smithj', fn: (f,l) => `${l}${f[0]||''}` },
+  { id: 'last.first', label: 'smith.jane', fn: (f,l) => `${l}.${f}` },
+  { id: 'lastfirst', label: 'smithjane', fn: (f,l) => `${l}${f}` },
+  { id: 'first_last', label: 'jane_smith', fn: (f,l) => `${f}_${l}` },
+  { id: 'last_first', label: 'smith_jane', fn: (f,l) => `${l}_${f}` },
+];
+
+function initPatternChecks() {
+  const container = document.getElementById('patternChecks');
+  container.innerHTML = PATTERNS.map(p => `
+    <label><input type="checkbox" value="${p.id}" checked> <code>${p.label}</code></label>
+  `).join('');
+}
+initPatternChecks();
+
+const NICKNAME_MAP = {
+  bill:'william', will:'william', bob:'robert', rob:'robert', bobby:'robert',
+  dick:'richard', rick:'richard', rich:'richard', jim:'james', jimmy:'james',
+  jack:'john', johnny:'john', mike:'michael', mikey:'michael', steve:'steven',
+  dave:'david', dan:'daniel', danny:'daniel', tom:'thomas', tommy:'thomas',
+  chris:'christopher', greg:'gregory', ken:'kenneth', ted:'edward', ed:'edward',
+  eddie:'edward', andy:'andrew', drew:'andrew', matt:'matthew', nick:'nicholas',
+  tony:'anthony', sam:'samuel', sammy:'samuel', joe:'joseph', joey:'joseph',
+  beth:'elizabeth', liz:'elizabeth', eliza:'elizabeth', kate:'katherine',
+  katie:'katherine', kathy:'katherine', meg:'margaret', peggy:'margaret',
+  sue:'susan', suzy:'susan', jen:'jennifer', jenny:'jennifer', cindy:'cynthia',
+  deb:'deborah', debbie:'deborah', pat:'patricia', trish:'patricia',
+  vicky:'victoria', vic:'victoria', abby:'abigail'
+};
+
+function cleanPart(s) {
+  return (s || '').toLowerCase().replace(/[^a-z\-']/g, '').replace(/['-]/g, '');
+}
+
+function nameVariants(first, expand) {
+  const variants = new Set([first]);
+  if (!expand) return Array.from(variants);
+  if (NICKNAME_MAP[first]) variants.add(NICKNAME_MAP[first]);
+  Object.entries(NICKNAME_MAP).forEach(([nick, formal]) => {
+    if (formal === first) variants.add(nick);
+  });
+  return Array.from(variants);
+}
+
+function parseName(full) {
+  const rawTokens = full.trim().replace(/-/g, ' ').split(/\s+/).filter(Boolean);
+  if (rawTokens.length === 0) return null;
+  if (rawTokens.length === 1) return { first: cleanPart(rawTokens[0]), last: '', last2: '' };
+  const first = cleanPart(rawTokens[0]);
+  const last = cleanPart(rawTokens[rawTokens.length - 1]);
+  let last2 = '';
+  if (rawTokens.length > 2) {
+    const candidate = cleanPart(rawTokens[rawTokens.length - 2]);
+    if (candidate !== first) last2 = candidate;
+  }
+  return { first, last, last2 };
+}
+
+let lastResults = [];
+
+function generate() {
+  const namesRaw = document.getElementById('names').value;
+  const domain = document.getElementById('domain').value.trim();
+  const checked = Array.from(document.querySelectorAll('#patternChecks input:checked')).map(c => c.value);
+  const activePatterns = PATTERNS.filter(p => checked.includes(p.id));
+
+  const lines = namesRaw.split('\n').map(l => l.trim()).filter(Boolean);
+  const rows = [];
+
+  const expand = document.getElementById('expandNicknames').checked;
+
+  lines.forEach(fullName => {
+    const parsed = parseName(fullName);
+    if (!parsed || (!parsed.first && !parsed.last)) return;
+    const { last, last2 } = parsed;
+    const candidates = new Set();
+
+    nameVariants(parsed.first, expand).forEach(first => {
+      activePatterns.forEach(p => {
+        let uname = p.fn(first, last);
+        if (uname) candidates.add(uname.slice(0, 20));
+      });
+      if (last2) {
+        [`${first}.${last2}${last}`, `${first}.${last2}.${last}`,
+         `${first[0]}${last2}${last}`, `${first}.${last2}`].forEach(u => {
+          if (u) candidates.add(u.slice(0, 20));
+        });
+      }
+    });
+
+    Array.from(candidates).sort().forEach(uname => {
+      rows.push({
+        full_name: fullName,
+        username: uname,
+        email: domain ? `${uname}@${domain}` : ''
+      });
+    });
+  });
+
+  lastResults = rows;
+  renderResults(rows);
+}
+
+function renderResults(rows) {
+  const panel = document.getElementById('resultsPanel');
+  const body = document.getElementById('resultsBody');
+  const count = document.getElementById('countLine');
+  if (rows.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+  count.textContent = `${rows.length} candidate username(s) generated`;
+  body.innerHTML = rows.map(r => `
+    <tr><td>${escapeHtml(r.full_name)}</td><td><code>${escapeHtml(r.username)}</code></td><td>${escapeHtml(r.email)}</td></tr>
+  `).join('');
+}
+
+function escapeHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function generateDorks() {
+  const domain = document.getElementById('domain').value.trim();
+  const company = document.getElementById('companyName').value.trim() || (domain ? domain.split('.')[0] : '');
+  if (!domain && !company) return;
+
+  const dorks = [
+    `site:linkedin.com/in "${company}"`,
+    domain ? `site:${domain} filetype:pdf` : null,
+    domain ? `site:${domain} filetype:xlsx OR filetype:docx` : null,
+    domain ? `"${company}" "@${domain}" -site:${domain}` : null,
+    domain ? `site:pastebin.com "${domain}"` : null,
+    domain ? `site:github.com "${domain}" password OR secret OR api_key` : null,
+    `site:trello.com "${company}"`,
+    domain ? `intitle:"index of" "${domain}"` : null,
+    domain ? `site:${domain} "employee handbook" OR "org chart"` : null,
+  ].filter(Boolean);
+
+  const out = document.getElementById('dorksOut');
+  const body = document.getElementById('dorksBody');
+  out.style.display = 'block';
+  body.innerHTML = dorks.map(d => `<tr><td><code>${escapeHtml(d)}</code></td></tr>`).join('');
+}
+
+function downloadBlob(content, filename, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportCSV() {
+  if (lastResults.length === 0) { generate(); }
+  if (lastResults.length === 0) return;
+  const header = 'full_name,username,email';
+  const lines = lastResults.map(r => [r.full_name, r.username, r.email]
+    .map(v => `"${(v || '').replace(/"/g, '""')}"`).join(','));
+  downloadBlob([header, ...lines].join('\n'), 'ad_usernames.csv', 'text/csv');
+}
+
+function exportJSON() {
+  if (lastResults.length === 0) { generate(); }
+  if (lastResults.length === 0) return;
+  downloadBlob(JSON.stringify(lastResults, null, 2), 'ad_usernames.json', 'application/json');
+}
+</script>
+</body>
+</html>
